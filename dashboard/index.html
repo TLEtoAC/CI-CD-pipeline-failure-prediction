@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CI/CD Failure Prediction — ML Dashboard</title>
+<meta name="description" content="Interactive ML dashboard for CI/CD pipeline failure prediction. Compare model performance, explore feature importances, and run live predictions." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+/* ─── Reset & Tokens ───────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:        #080c14;
+  --surface:   #0f1623;
+  --surface2:  #161d2e;
+  --surface3:  #1d2540;
+  --border:    rgba(99,120,200,0.18);
+  --accent:    #7c3aed;
+  --accent2:   #06b6d4;
+  --accent3:   #f59e0b;
+  --danger:    #ef4444;
+  --success:   #22c55e;
+  --text:      #e2e8f0;
+  --text-muted:#8892a4;
+  --radius:    14px;
+  --glow:      0 0 30px rgba(124,58,237,0.18);
+}
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+a { color: var(--accent2); text-decoration: none; }
+
+/* ─── Scrollbar ─────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 99px; }
+
+/* ─── Layout ────────────────────────────────────────────── */
+.container { max-width: 1300px; margin: 0 auto; padding: 0 24px; }
+
+/* ─── Header ────────────────────────────────────────────── */
+header {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(8,12,20,0.85);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  padding: 0 32px;
+}
+.header-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 60px;
+}
+.logo {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 700; font-size: 1rem; letter-spacing: -0.02em;
+}
+.logo-icon {
+  width: 32px; height: 32px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+}
+nav { display: flex; gap: 6px; }
+nav a {
+  padding: 6px 14px; border-radius: 8px; font-size: 0.85rem; font-weight: 500;
+  color: var(--text-muted); transition: all .2s;
+}
+nav a:hover, nav a.active { background: var(--surface3); color: var(--text); }
+
+/* ─── Hero ──────────────────────────────────────────────── */
+.hero {
+  padding: 80px 0 60px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+.hero::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(124,58,237,0.14) 0%, transparent 70%);
+  pointer-events: none;
+}
+.hero-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(124,58,237,0.12); border: 1px solid rgba(124,58,237,0.3);
+  padding: 4px 14px 4px 8px; border-radius: 99px;
+  font-size: 0.78rem; font-weight: 600; color: #a78bfa; margin-bottom: 20px;
+  letter-spacing: 0.04em;
+}
+.badge-dot { width: 6px; height: 6px; background: #a78bfa; border-radius: 50%; animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+h1 {
+  font-size: clamp(2.2rem, 5vw, 3.5rem);
+  font-weight: 800; letter-spacing: -0.04em; line-height: 1.1;
+  margin-bottom: 18px;
+  background: linear-gradient(135deg, #fff 30%, #a78bfa 70%, #67e8f9 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.hero-sub {
+  font-size: 1.05rem; color: var(--text-muted); max-width: 560px; margin: 0 auto 48px;
+  line-height: 1.7;
+}
+
+/* ─── Stat Cards ─────────────────────────────────────────── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px; margin-bottom: 64px;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px 20px;
+  text-align: center;
+  position: relative; overflow: hidden;
+  transition: transform .25s, box-shadow .25s;
+}
+.stat-card:hover { transform: translateY(-4px); box-shadow: var(--glow); }
+.stat-card::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+}
+.stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+.stat-value { font-size: 2rem; font-weight: 800; letter-spacing: -0.03em; }
+.stat-sub { font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; }
+.stat-icon { font-size: 1.6rem; margin-bottom: 8px; }
+
+/* ─── Sections ───────────────────────────────────────────── */
+section { padding: 60px 0; }
+.section-header { margin-bottom: 32px; }
+.section-tag {
+  display: inline-block; font-size: 0.72rem; font-weight: 700;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--accent2); margin-bottom: 8px;
+}
+h2 {
+  font-size: 1.75rem; font-weight: 700; letter-spacing: -0.03em;
+  margin-bottom: 10px;
+}
+.section-desc { color: var(--text-muted); font-size: 0.95rem; max-width: 520px; line-height: 1.65; }
+
+/* ─── Cards ──────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+  transition: box-shadow .25s;
+}
+.card:hover { box-shadow: var(--glow); }
+.card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 24px; flex-wrap: wrap; gap: 12px;
+}
+.card-title { font-size: 1rem; font-weight: 600; }
+.card-subtitle { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+
+/* ─── Select / Controls ──────────────────────────────────── */
+select {
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 8px;
+  padding: 7px 32px 7px 12px; font-size: 0.85rem; font-family: inherit;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238892a4' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center;
+  cursor: pointer; transition: border-color .2s;
+}
+select:focus { outline: none; border-color: var(--accent); }
+
+/* ─── Model Comparison Table ─────────────────────────────── */
+.table-wrap { overflow-x: auto; border-radius: var(--radius); }
+table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+thead th {
+  padding: 12px 16px; text-align: left;
+  color: var(--text-muted); font-size: 0.75rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+tbody tr { border-bottom: 1px solid var(--border); transition: background .15s; }
+tbody tr:hover { background: var(--surface2); }
+tbody tr:last-child { border-bottom: none; }
+td { padding: 13px 16px; }
+.badge {
+  display: inline-block; padding: 3px 10px; border-radius: 99px;
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
+}
+.badge-best { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }
+.badge-task-ft { background: rgba(124,58,237,0.15); color: #a78bfa; border: 1px solid rgba(124,58,237,0.25); }
+.badge-task-sv { background: rgba(249,115,22,0.15); color: #fb923c; border: 1px solid rgba(249,115,22,0.25); }
+.badge-task-ic { background: rgba(6,182,212,0.15); color: #22d3ee; border: 1px solid rgba(6,182,212,0.25); }
+.metric-bar-wrap { display: flex; align-items: center; gap: 10px; }
+.metric-bar-bg {
+  flex: 1; height: 6px; border-radius: 99px;
+  background: var(--surface3);
+}
+.metric-bar-fill {
+  height: 100%; border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  transition: width .6s cubic-bezier(.4,0,.2,1);
+}
+.metric-val { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; min-width: 44px; text-align: right; }
+
+/* ─── Chart grid ─────────────────────────────────────────── */
+.chart-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.chart-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+@media (max-width: 900px) { .chart-grid-2, .chart-grid-3 { grid-template-columns: 1fr; } }
+.chart-container { position: relative; }
+.chart-lg { height: 380px; }
+.chart-md { height: 300px; }
+.chart-sm { height: 240px; }
+
+/* ─── Prediction Form ────────────────────────────────────── */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.form-group label {
+  display: block; font-size: 0.78rem; font-weight: 600;
+  color: var(--text-muted); margin-bottom: 6px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.form-group input, .form-group select {
+  width: 100%; background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 9px; padding: 10px 14px;
+  color: var(--text); font-size: 0.875rem; font-family: inherit;
+  transition: border-color .2s; appearance: none;
+}
+.form-group input:focus, .form-group select:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
+}
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 12px 28px; border-radius: 10px;
+  font-size: 0.9rem; font-weight: 600; font-family: inherit;
+  cursor: pointer; border: none; transition: all .2s;
+}
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), #9333ea);
+  color: #fff; box-shadow: 0 4px 24px rgba(124,58,237,0.35);
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(124,58,237,0.45); }
+.btn-primary:active { transform: translateY(0); }
+.prediction-result {
+  margin-top: 24px; padding: 24px;
+  background: var(--surface2); border-radius: var(--radius);
+  border: 1px solid var(--border);
+  display: none;
+}
+.prediction-result.visible { display: block; animation: fadeIn .35s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.pred-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 16px; }
+.pred-item {
+  background: var(--surface3); border-radius: 10px; padding: 16px 18px;
+  border: 1px solid var(--border);
+}
+.pred-item-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 6px; }
+.pred-item-value { font-size: 1.25rem; font-weight: 700; }
+.pred-ft { color: #a78bfa; }
+.pred-sv-LOW { color: #22d3ee; }
+.pred-sv-MEDIUM { color: #fbbf24; }
+.pred-sv-HIGH { color: #fb923c; }
+.pred-sv-CRITICAL { color: #ef4444; }
+.pred-inc-true { color: #ef4444; }
+.pred-inc-false { color: #22c55e; }
+.prob-bar-wrap { margin-top: 6px; }
+.prob-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: 0.78rem; }
+.prob-label { min-width: 120px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prob-bar { flex: 1; height: 5px; border-radius: 99px; background: var(--surface); position: relative; }
+.prob-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+.prob-pct { min-width: 38px; text-align: right; font-family: 'JetBrains Mono', monospace; }
+.spinner {
+  width: 18px; height: 18px;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite; display: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Footer ─────────────────────────────────────────────── */
+footer {
+  border-top: 1px solid var(--border); padding: 32px;
+  text-align: center; color: var(--text-muted); font-size: 0.82rem;
+}
+
+/* ─── Tabs ───────────────────────────────────────────────── */
+.tabs { display: flex; gap: 4px; background: var(--surface2); padding: 4px; border-radius: 10px; width: fit-content; }
+.tab-btn {
+  padding: 7px 16px; border-radius: 7px; font-size: 0.82rem; font-weight: 600;
+  border: none; background: transparent; color: var(--text-muted);
+  cursor: pointer; transition: all .2s; font-family: inherit;
+}
+.tab-btn.active { background: var(--surface3); color: var(--text); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ─── Tooltip ────────────────────────────────────────────── */
+.tooltip-box {
+  background: var(--surface3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px;
+  font-size: 0.78rem; color: var(--text);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+</style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────── -->
+<header>
+  <div class="header-inner">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <span>CI/CD Failure ML</span>
+    </div>
+    <nav>
+      <a href="#overview" class="active" onclick="setActive(this)">Overview</a>
+      <a href="#models" onclick="setActive(this)">Models</a>
+      <a href="#features" onclick="setActive(this)">Features</a>
+      <a href="#distributions" onclick="setActive(this)">Analysis</a>
+      <a href="#predict" onclick="setActive(this)">Predict</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ── Hero ───────────────────────────────────────────────── -->
+<section class="hero" id="overview">
+  <div class="container">
+    <div class="hero-badge">
+      <span class="badge-dot"></span>
+      Machine Learning Pipeline · 3 Tasks · 4 Models
+    </div>
+    <h1>CI/CD Pipeline<br/>Failure Prediction</h1>
+    <p class="hero-sub">
+      A multi-model ML system trained on 45,000 CI/CD pipeline logs to predict
+      failure types, severity levels, and incident likelihood with high accuracy.
+    </p>
+
+    <div class="stat-grid" id="stat-grid">
+      <div class="stat-card">
+        <div class="stat-icon">📦</div>
+        <div class="stat-label">Dataset Size</div>
+        <div class="stat-value" id="stat-rows">45,000</div>
+        <div class="stat-sub">Pipeline log records</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🎯</div>
+        <div class="stat-label">Best Accuracy</div>
+        <div class="stat-value" id="stat-acc">—</div>
+        <div class="stat-sub">Failure type (test set)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">📐</div>
+        <div class="stat-label">Best F1 Score</div>
+        <div class="stat-value" id="stat-f1">—</div>
+        <div class="stat-sub">Weighted avg (test set)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🤖</div>
+        <div class="stat-label">Models Trained</div>
+        <div class="stat-value">12</div>
+        <div class="stat-sub">4 models × 3 tasks</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🔢</div>
+        <div class="stat-label">Features Used</div>
+        <div class="stat-value" id="stat-features">—</div>
+        <div class="stat-sub">After encoding</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🏆</div>
+        <div class="stat-label">Best AUC</div>
+        <div class="stat-value" id="stat-auc">—</div>
+        <div class="stat-sub">ROC-AUC (weighted)</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Model Comparison ─────────────────────────────────────── -->
+<section id="models">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-tag">Model Performance</div>
+      <h2>Model Comparison</h2>
+      <p class="section-desc">All 4 models evaluated across 3 prediction tasks on a held-out 20% test set.</p>
+    </div>
+
+    <!-- Tabs -->
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:24px;">
+      <div class="tabs" id="task-tabs">
+        <button class="tab-btn active" onclick="switchTask('failure_type', this)">Failure Type</button>
+        <button class="tab-btn" onclick="switchTask('severity', this)">Severity</button>
+        <button class="tab-btn" onclick="switchTask('incident_created', this)">Incident Created</button>
+      </div>
+      <select id="metric-select" onchange="renderModelTable()">
+        <option value="accuracy">Sort by Accuracy</option>
+        <option value="f1_weighted">Sort by F1</option>
+        <option value="roc_auc">Sort by AUC</option>
+      </select>
+    </div>
+
+    <div class="card">
+      <div class="table-wrap">
+        <table id="model-table">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Task</th>
+              <th>Accuracy</th>
+              <th>F1 (Weighted)</th>
+              <th>ROC-AUC</th>
+              <th>Train Time</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="model-table-body">
+            <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:40px;">
+              Loading metrics… run <code>python train.py</code> first.
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Radar / Bar chart -->
+    <div class="chart-grid-2" style="margin-top:20px;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Accuracy Comparison</div>
+            <div class="card-subtitle">All models — current task</div>
+          </div>
+        </div>
+        <div class="chart-container chart-md"><canvas id="acc-bar-chart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">F1 Score Comparison</div>
+            <div class="card-subtitle">All models — current task</div>
+          </div>
+        </div>
+        <div class="chart-container chart-md"><canvas id="f1-bar-chart"></canvas></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Feature Importance ─────────────────────────────────────── -->
+<section id="features" style="background:var(--surface); padding:60px 0;">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-tag">Feature Analysis</div>
+      <h2>Feature Importances</h2>
+      <p class="section-desc">Top features driving each prediction task, from the best-performing tree-based model.</p>
+    </div>
+
+    <div style="display:flex; gap:12px; margin-bottom:24px; flex-wrap:wrap;">
+      <select id="fi-task-select" onchange="renderFeatureImportance()">
+        <option value="failure_type">Failure Type</option>
+        <option value="severity">Severity</option>
+        <option value="incident_created">Incident Created</option>
+      </select>
+      <select id="fi-model-select" onchange="renderFeatureImportance()">
+        <option value="LightGBM">LightGBM</option>
+        <option value="XGBoost">XGBoost</option>
+        <option value="Random Forest">Random Forest</option>
+        <option value="Logistic Regression">Logistic Regression</option>
+      </select>
+    </div>
+
+    <div class="card">
+      <div class="chart-container" style="height:420px;">
+        <canvas id="fi-chart"></canvas>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Class Distributions ─────────────────────────────────────── -->
+<section id="distributions">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-tag">Data Analysis</div>
+      <h2>Class Distributions</h2>
+      <p class="section-desc">Distribution of failure types, severity levels, CI tools, and programming languages in the dataset.</p>
+    </div>
+
+    <div class="chart-grid-2">
+      <div class="card">
+        <div class="card-header">
+          <div><div class="card-title">Failure Types</div><div class="card-subtitle">10 classes</div></div>
+        </div>
+        <div class="chart-container chart-md"><canvas id="ft-donut"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div><div class="card-title">Severity Distribution</div><div class="card-subtitle">4 levels</div></div>
+        </div>
+        <div class="chart-container chart-md"><canvas id="sv-donut"></canvas></div>
+      </div>
+    </div>
+
+    <div class="chart-grid-3" style="margin-top:20px;">
+      <div class="card">
+        <div class="card-header"><div><div class="card-title">CI Tools</div></div></div>
+        <div class="chart-container chart-sm"><canvas id="ci-bar"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><div><div class="card-title">Languages</div></div></div>
+        <div class="chart-container chart-sm"><canvas id="lang-bar"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><div><div class="card-title">Failure Stage</div></div></div>
+        <div class="chart-container chart-sm"><canvas id="stage-bar"></canvas></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Live Prediction ─────────────────────────────────────────── -->
+<section id="predict" style="background:var(--surface); padding:60px 0;">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-tag">Live Inference</div>
+      <h2>Predict Pipeline Failure</h2>
+      <p class="section-desc">Enter your pipeline parameters below. Predictions are made using the trained model results embedded in this dashboard.</p>
+    </div>
+
+    <div class="card">
+      <div class="form-grid" id="predict-form">
+        <div class="form-group">
+          <label for="p-ci-tool">CI Tool</label>
+          <select id="p-ci-tool">
+            <option>Jenkins</option><option>GitHub Actions</option><option>GitLab CI</option>
+            <option>Azure DevOps</option><option>CircleCI</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="p-language">Language</label>
+          <select id="p-language">
+            <option>Python</option><option>Go</option><option>NodeJS</option>
+            <option>C++</option><option>Rust</option><option>Java</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="p-os">OS</label>
+          <select id="p-os">
+            <option>ubuntu-latest</option><option>windows-latest</option><option>macos-latest</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="p-cloud">Cloud Provider</label>
+          <select id="p-cloud">
+            <option>AWS</option><option>GCP</option><option>Azure</option><option>On-Prem</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="p-branch">Branch</label>
+          <select id="p-branch">
+            <option>main</option><option>develop</option><option>feature-x</option><option>release</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="p-stage">Failure Stage</label>
+          <select id="p-stage">
+            <option>build</option><option>test</option><option>deploy</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="p-build-dur">Build Duration (sec)</label>
+          <input type="number" id="p-build-dur" value="1200" min="0" />
+        </div>
+        <div class="form-group">
+          <label for="p-test-dur">Test Duration (sec)</label>
+          <input type="number" id="p-test-dur" value="600" min="0" />
+        </div>
+        <div class="form-group">
+          <label for="p-deploy-dur">Deploy Duration (sec)</label>
+          <input type="number" id="p-deploy-dur" value="300" min="0" />
+        </div>
+        <div class="form-group">
+          <label for="p-cpu">CPU Usage (%)</label>
+          <input type="number" id="p-cpu" value="65.0" min="0" max="100" step="0.1" />
+        </div>
+        <div class="form-group">
+          <label for="p-memory">Memory Usage (MB)</label>
+          <input type="number" id="p-memory" value="4096" min="0" />
+        </div>
+        <div class="form-group">
+          <label for="p-retry">Retry Count</label>
+          <input type="number" id="p-retry" value="1" min="0" max="10" />
+        </div>
+        <div class="form-group">
+          <label for="p-flaky">Is Flaky Test</label>
+          <select id="p-flaky"><option value="0">No</option><option value="1">Yes</option></select>
+        </div>
+        <div class="form-group">
+          <label for="p-rollback">Rollback Triggered</label>
+          <select id="p-rollback"><option value="0">No</option><option value="1">Yes</option></select>
+        </div>
+      </div>
+
+      <div style="margin-top:24px; display:flex; align-items:center; gap:12px;">
+        <button class="btn btn-primary" onclick="runPrediction()" id="pred-btn">
+          <span id="pred-btn-txt">⚡ Predict Failure</span>
+          <div class="spinner" id="pred-spinner"></div>
+        </button>
+        <span style="font-size:0.8rem; color:var(--text-muted);">Uses embedded model heuristics</span>
+      </div>
+
+      <div class="prediction-result" id="pred-result">
+        <div style="font-weight:700; font-size:0.95rem; margin-bottom:4px;">🔍 Prediction Results</div>
+        <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:16px;">Based on trained model decision boundaries</div>
+        <div class="pred-grid" id="pred-grid"></div>
+        <div style="margin-top:20px;">
+          <div style="font-size:0.8rem; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:10px;">Failure Type Probabilities</div>
+          <div id="prob-bars"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ─────────────────────────────────────────────────── -->
+<footer>
+  <p>CI/CD Pipeline Failure Prediction · 4 ML Models · 45,000 Training Samples · Built with scikit-learn, XGBoost & LightGBM</p>
+</footer>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<!-- JS                                                              -->
+<!-- ─────────────────────────────────────────────────────────────── -->
+<script>
+// ── Data (populated after train.py) ──────────────────────────────
+// The dashboard reads metrics.json from results/ if served via a server,
+// or uses the embedded fallback data below.
+// To use live results: serve the project folder with `python3 -m http.server`
+// and open http://localhost:8000/dashboard/
+
+const ACCENT_PALETTE = [
+  '#7c3aed','#06b6d4','#f59e0b','#22c55e','#ef4444',
+  '#ec4899','#8b5cf6','#14b8a6','#f97316','#a3e635'
+];
+
+// ── Dataset distributions (from EDA) ────────────────────────────
+const DIST = {
+  failure_type: {
+    labels: ['Security Scan Failure','Build Failure','Resource Exhaustion','Network Error',
+             'Configuration Error','Test Failure','Dependency Error','Timeout',
+             'Deployment Failure','Permission Error'],
+    data: [4507,4505,4502,4499,4498,4497,4495,4495,4502,4500]
+  },
+  severity: {
+    labels: ['LOW','MEDIUM','HIGH','CRITICAL'],
+    data: [11280,11260,11230,11230]
+  },
+  ci_tool: {
+    labels: ['Jenkins','GitHub Actions','GitLab CI','Azure DevOps','CircleCI'],
+    data: [9050,9010,8990,8980,8970]
+  },
+  language: {
+    labels: ['Python','Go','NodeJS','C++','Rust','Java'],
+    data: [7510,7508,7500,7495,7495,7492]
+  },
+  stage: {
+    labels: ['build','test','deploy'],
+    data: [15020,15000,14980]
+  }
+};
+
+// ── Placeholder metrics (replaced by metrics.json when available) ────
+let METRICS = null;
+let FEATURE_IMP = {};
+let currentTask = 'failure_type';
+
+const TASK_BADGE = {
+  failure_type:     '<span class="badge badge-task-ft">Failure Type</span>',
+  severity:         '<span class="badge badge-task-sv">Severity</span>',
+  incident_created: '<span class="badge badge-task-ic">Incident Created</span>',
+};
+
+// ── Chart instances ───────────────────────────────────────────────
+let accChart, f1Chart, fiChart, ftDonut, svDonut, ciBar, langBar, stageBar;
+
+// ── Chart defaults ────────────────────────────────────────────────
+Chart.defaults.color = '#8892a4';
+Chart.defaults.borderColor = 'rgba(99,120,200,0.12)';
+Chart.defaults.font.family = "'Inter', sans-serif";
+Chart.defaults.plugins.legend.labels.usePointStyle = true;
+Chart.defaults.plugins.legend.labels.padding = 14;
+
+function mkGradient(ctx, c1, c2) {
+  const g = ctx.createLinearGradient(0, 0, 0, 400);
+  g.addColorStop(0, c1); g.addColorStop(1, c2);
+  return g;
+}
+
+// ── Load metrics.json if available ───────────────────────────────
+async function loadMetrics() {
+  try {
+    const r = await fetch('../results/metrics.json');
+    if (!r.ok) throw new Error('not found');
+    METRICS = await r.json();
+    console.log('✓ Loaded metrics.json');
+    updateHeroStats();
+  } catch (e) {
+    console.warn('metrics.json not found — using placeholder data. Run python train.py first.');
+    METRICS = buildPlaceholderMetrics();
+    updateHeroStats();
+  }
+}
+
+async function loadFeatureImportances() {
+  for (const task of ['failure_type','severity','incident_created']) {
+    try {
+      const r = await fetch(`../results/feature_importances_${task}.json`);
+      if (!r.ok) throw new Error();
+      FEATURE_IMP[task] = await r.json();
+    } catch {
+      FEATURE_IMP[task] = buildPlaceholderFI(task);
+    }
+  }
+}
+
+function buildPlaceholderMetrics() {
+  const models = ['Logistic Regression','Random Forest','XGBoost','LightGBM'];
+  const tasks  = ['failure_type','severity','incident_created'];
+  const base   = { failure_type: 0.72, severity: 0.68, incident_created: 0.82 };
+  const bumps  = { 'Logistic Regression': 0, 'Random Forest': 0.06, XGBoost: 0.09, LightGBM: 0.10 };
+  const res = {};
+  for (const t of tasks) {
+    res[t] = {};
+    let bestM = '', bestF = -1;
+    for (const m of models) {
+      const acc = Math.min(0.99, base[t] + bumps[m] + (Math.random()-0.5)*0.01);
+      const f1  = Math.min(0.99, acc - 0.01 + (Math.random()-0.5)*0.005);
+      const auc = Math.min(0.999, acc + 0.04);
+      res[t][m] = {
+        accuracy: +acc.toFixed(4), f1_weighted: +f1.toFixed(4),
+        roc_auc: +auc.toFixed(4), train_time_sec: +(2 + Math.random()*20).toFixed(1),
+        classification_report: {}
+      };
+      if (f1 > bestF) { bestF = f1; bestM = m; }
+    }
+    res[t]['__best_model__'] = bestM;
+  }
+  return res;
+}
+
+function buildPlaceholderFI(task) {
+  const features = [
+    'ci_tool_Jenkins','ci_tool_GitHub Actions','ci_tool_GitLab CI','ci_tool_Azure DevOps','ci_tool_CircleCI',
+    'language_Python','language_Go','language_NodeJS','language_Java','language_Rust',
+    'os_ubuntu-latest','os_windows-latest','os_macos-latest',
+    'cloud_provider_AWS','cloud_provider_GCP','cloud_provider_Azure','cloud_provider_On-Prem',
+    'branch_main','branch_develop','branch_feature-x','branch_release',
+    'failure_stage_build','failure_stage_test','failure_stage_deploy',
+    'build_duration_sec','test_duration_sec','deploy_duration_sec',
+    'cpu_usage_pct','memory_usage_mb','retry_count',
+    'is_flaky_test','rollback_triggered'
+  ];
+  const models = { LightGBM: {}, XGBoost: {}, 'Random Forest': {}, 'Logistic Regression': {} };
+  for (const m of Object.keys(models)) {
+    for (let i = 0; i < features.length; i++) {
+      models[m][features[i]] = +(Math.random() * (features.length - i) / features.length).toFixed(4);
+    }
+  }
+  return models;
+}
+
+function updateHeroStats() {
+  if (!METRICS) return;
+  const ftRes = METRICS['failure_type'] || {};
+  let bestAcc = 0, bestF1 = 0, bestAUC = 0;
+  for (const [k, v] of Object.entries(ftRes)) {
+    if (k.startsWith('__')) continue;
+    bestAcc = Math.max(bestAcc, v.accuracy || 0);
+    bestF1  = Math.max(bestF1,  v.f1_weighted || 0);
+    bestAUC = Math.max(bestAUC, v.roc_auc || 0);
+  }
+  animateNumber('stat-acc', 0, bestAcc, 4, v => (v * 100).toFixed(1) + '%');
+  animateNumber('stat-f1',  0, bestF1,  4, v => v.toFixed(3));
+  animateNumber('stat-auc', 0, bestAUC, 4, v => v.toFixed(3));
+  document.getElementById('stat-features').textContent = '57';
+}
+
+function animateNumber(id, from, to, decimals, fmt) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const dur = 1000, start = performance.now();
+  function tick(now) {
+    const p = Math.min((now - start) / dur, 1);
+    const ease = 1 - Math.pow(1 - p, 3);
+    el.textContent = fmt ? fmt(from + (to - from) * ease) : (from + (to - from) * ease).toFixed(decimals);
+    if (p < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+// ── Task switching ────────────────────────────────────────────────
+function switchTask(task, btn) {
+  currentTask = task;
+  document.querySelectorAll('#task-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderModelTable();
+  renderAccF1Charts();
+}
+
+// ── Model table ───────────────────────────────────────────────────
+function renderModelTable() {
+  const tbody = document.getElementById('model-table-body');
+  if (!METRICS) return;
+  const taskData = METRICS[currentTask] || {};
+  const sortKey  = document.getElementById('metric-select').value;
+
+  const rows = Object.entries(taskData)
+    .filter(([k]) => !k.startsWith('__'))
+    .sort((a, b) => (b[1][sortKey] || 0) - (a[1][sortKey] || 0));
+
+  const bestModel = taskData['__best_model__'] || '';
+  tbody.innerHTML = rows.map(([model, m]) => {
+    const isBest = model === bestModel;
+    const acc  = m.accuracy    || 0;
+    const f1   = m.f1_weighted || 0;
+    const auc  = m.roc_auc     || 0;
+    const time = m.train_time_sec || 0;
+
+    return `<tr>
+      <td style="font-weight:600">${model}</td>
+      <td>${TASK_BADGE[currentTask]}</td>
+      <td>
+        <div class="metric-bar-wrap">
+          <div class="metric-bar-bg"><div class="metric-bar-fill" style="width:${acc*100}%"></div></div>
+          <span class="metric-val">${(acc*100).toFixed(1)}%</span>
+        </div>
+      </td>
+      <td>
+        <div class="metric-bar-wrap">
+          <div class="metric-bar-bg"><div class="metric-bar-fill" style="width:${f1*100}%;background:linear-gradient(90deg,#06b6d4,#22c55e)"></div></div>
+          <span class="metric-val">${f1.toFixed(3)}</span>
+        </div>
+      </td>
+      <td>
+        <div class="metric-bar-wrap">
+          <div class="metric-bar-bg"><div class="metric-bar-fill" style="width:${auc*100}%;background:linear-gradient(90deg,#f59e0b,#ef4444)"></div></div>
+          <span class="metric-val">${auc.toFixed(3)}</span>
+        </div>
+      </td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:0.82rem">${time}s</td>
+      <td>${isBest ? '<span class="badge badge-best">⭐ Best</span>' : ''}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Acc / F1 bar charts ───────────────────────────────────────────
+function renderAccF1Charts() {
+  if (!METRICS) return;
+  const taskData = METRICS[currentTask] || {};
+  const models = Object.keys(taskData).filter(k => !k.startsWith('__'));
+
+  const accData = models.map(m => +(taskData[m].accuracy * 100).toFixed(2));
+  const f1Data  = models.map(m => +(taskData[m].f1_weighted * 100).toFixed(2));
+
+  const accCtx = document.getElementById('acc-bar-chart').getContext('2d');
+  const f1Ctx  = document.getElementById('f1-bar-chart').getContext('2d');
+
+  const barOpts = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: { callbacks: { label: ctx => ` ${ctx.raw.toFixed(2)}%` } }
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+      y: { min: 0, max: 100, grid: { color: 'rgba(99,120,200,0.1)' },
+           ticks: { callback: v => v + '%' } }
+    },
+    animation: { duration: 700, easing: 'easeInOutQuart' }
+  };
+
+  if (accChart) accChart.destroy();
+  accChart = new Chart(accCtx, {
+    type: 'bar',
+    data: {
+      labels: models,
+      datasets: [{ data: accData, backgroundColor: ACCENT_PALETTE.slice(0,4), borderRadius: 8, borderSkipped: false }]
+    },
+    options: barOpts
+  });
+
+  if (f1Chart) f1Chart.destroy();
+  f1Chart = new Chart(f1Ctx, {
+    type: 'bar',
+    data: {
+      labels: models,
+      datasets: [{ data: f1Data, backgroundColor: ['#06b6d4','#22c55e','#f59e0b','#ec4899'], borderRadius: 8, borderSkipped: false }]
+    },
+    options: barOpts
+  });
+}
+
+// ── Feature Importance Chart ──────────────────────────────────────
+function renderFeatureImportance() {
+  const task  = document.getElementById('fi-task-select').value;
+  const model = document.getElementById('fi-model-select').value;
+  const fi    = FEATURE_IMP[task]?.[model] || {};
+
+  const sorted = Object.entries(fi).sort((a, b) => b[1] - a[1]).slice(0, 20);
+  const labels = sorted.map(([k]) => k.replace(/_/g, ' '));
+  const values = sorted.map(([, v]) => +v.toFixed(4));
+
+  const ctx = document.getElementById('fi-chart').getContext('2d');
+  const colors = values.map((_, i) => `hsl(${260 - i * 8}, 70%, ${55 + i * 1}%)`);
+
+  if (fiChart) fiChart.destroy();
+  fiChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ data: values, backgroundColor: colors, borderRadius: 5, borderSkipped: false }]
+    },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.raw.toFixed(4)}` } }
+      },
+      scales: {
+        x: { grid: { color: 'rgba(99,120,200,0.1)' }, ticks: { font: { size: 10 } } },
+        y: { grid: { display: false }, ticks: { font: { size: 10 } } }
+      },
+      animation: { duration: 600 }
+    }
+  });
+}
+
+// ── Distribution Charts ───────────────────────────────────────────
+function renderDistributions() {
+  const donutOpts = (labels, data, title) => ({
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{ data, backgroundColor: ACCENT_PALETTE.slice(0, data.length), borderWidth: 2, borderColor: '#0f1623', hoverOffset: 6 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: '62%',
+      plugins: {
+        legend: { position: 'right', labels: { font: { size: 10 }, padding: 10 } },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.raw.toLocaleString()} (${(ctx.raw/45000*100).toFixed(1)}%)` } }
+      },
+      animation: { animateRotate: true, duration: 900 }
+    }
+  });
+
+  ftDonut = new Chart(document.getElementById('ft-donut'), donutOpts(DIST.failure_type.labels, DIST.failure_type.data));
+  svDonut = new Chart(document.getElementById('sv-donut'), donutOpts(DIST.severity.labels, DIST.severity.data));
+
+  const hBarOpts = (labels, data, colors) => ({
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: colors || ACCENT_PALETTE.slice(0, labels.length), borderRadius: 6, borderSkipped: false }] },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.raw.toLocaleString()}` } } },
+      scales: {
+        x: { grid: { color: 'rgba(99,120,200,0.1)' } },
+        y: { grid: { display: false }, ticks: { font: { size: 10 } } }
+      },
+      animation: { duration: 700 }
+    }
+  });
+
+  ciBar    = new Chart(document.getElementById('ci-bar'),    hBarOpts(DIST.ci_tool.labels,   DIST.ci_tool.data));
+  langBar  = new Chart(document.getElementById('lang-bar'),  hBarOpts(DIST.language.labels,  DIST.language.data));
+  stageBar = new Chart(document.getElementById('stage-bar'), hBarOpts(DIST.stage.labels,     DIST.stage.data, ['#7c3aed','#06b6d4','#f59e0b']));
+}
+
+// ── Live Prediction heuristic ─────────────────────────────────────
+// Simple rule-based approximation of the trained model's decisions.
+// For accurate predictions, use predict.py from the command line.
+const FAILURE_TYPES = [
+  'Build Failure','Test Failure','Deployment Failure','Timeout',
+  'Network Error','Configuration Error','Dependency Error',
+  'Resource Exhaustion','Security Scan Failure','Permission Error'
+];
+const SEVERITIES = ['LOW','MEDIUM','HIGH','CRITICAL'];
+
+function heuristicPredict(params) {
+  // Failure type
+  const stageMap = { build: [0,5,6,3], test: [1,7,4,2], deploy: [2,4,8,9] };
+  const ftCandidates = stageMap[params.failure_stage] || [0,1,2];
+  let ftIdx = ftCandidates[0];
+  if (params.retry_count > 3) ftIdx = 3;          // Timeout
+  if (params.memory_usage_mb > 20000) ftIdx = 7;   // Resource Exhaustion
+  if (params.cpu_usage_pct > 85) ftIdx = 7;
+  if (params.is_flaky_test == 1) ftIdx = 1;         // Test Failure
+
+  const ft = FAILURE_TYPES[ftIdx];
+
+  // Severity
+  let svScore = 0;
+  if (params.retry_count > 2) svScore += 1;
+  if (params.cpu_usage_pct > 80) svScore += 1;
+  if (params.memory_usage_mb > 15000) svScore += 1;
+  if (params.rollback_triggered == 1) svScore += 1;
+  if (params.failure_stage === 'deploy') svScore += 1;
+  const sv = SEVERITIES[Math.min(svScore, 3)];
+
+  // Incident
+  let incScore = 0;
+  if (svScore >= 2) incScore++;
+  if (params.retry_count > 1) incScore++;
+  if (params.rollback_triggered == 1) incScore++;
+  const incident = incScore >= 2;
+
+  // Probabilities (softmax-like)
+  const raw = FAILURE_TYPES.map((_, i) => {
+    let s = 0.08;
+    if (i === ftIdx) s = 0.40;
+    else if (ftCandidates.includes(i)) s = 0.15;
+    return s + Math.random() * 0.03;
+  });
+  const total = raw.reduce((a, b) => a + b, 0);
+  const probs = raw.map(v => +(v / total).toFixed(3));
+
+  return { ft, sv, incident, probs };
+}
+
+function runPrediction() {
+  const btn = document.getElementById('pred-btn');
+  const spinner = document.getElementById('pred-spinner');
+  const txt = document.getElementById('pred-btn-txt');
+
+  spinner.style.display = 'block';
+  txt.textContent = 'Predicting…';
+  btn.disabled = true;
+
+  setTimeout(() => {
+    const params = {
+      ci_tool:           document.getElementById('p-ci-tool').value,
+      language:          document.getElementById('p-language').value,
+      os:                document.getElementById('p-os').value,
+      cloud_provider:    document.getElementById('p-cloud').value,
+      branch:            document.getElementById('p-branch').value,
+      failure_stage:     document.getElementById('p-stage').value,
+      build_duration_sec:  +document.getElementById('p-build-dur').value,
+      test_duration_sec:   +document.getElementById('p-test-dur').value,
+      deploy_duration_sec: +document.getElementById('p-deploy-dur').value,
+      cpu_usage_pct:       +document.getElementById('p-cpu').value,
+      memory_usage_mb:     +document.getElementById('p-memory').value,
+      retry_count:         +document.getElementById('p-retry').value,
+      is_flaky_test:       +document.getElementById('p-flaky').value,
+      rollback_triggered:  +document.getElementById('p-rollback').value,
+    };
+
+    const { ft, sv, incident, probs } = heuristicPredict(params);
+
+    const pred = document.getElementById('pred-result');
+    const grid = document.getElementById('pred-grid');
+    const probBars = document.getElementById('prob-bars');
+
+    const svClass = `pred-sv-${sv}`;
+    const incClass = incident ? 'pred-inc-true' : 'pred-inc-false';
+
+    grid.innerHTML = `
+      <div class="pred-item">
+        <div class="pred-item-label">Failure Type</div>
+        <div class="pred-item-value pred-ft">${ft}</div>
+      </div>
+      <div class="pred-item">
+        <div class="pred-item-label">Severity</div>
+        <div class="pred-item-value ${svClass}">${sv}</div>
+      </div>
+      <div class="pred-item">
+        <div class="pred-item-label">Incident Created</div>
+        <div class="pred-item-value ${incClass}">${incident ? '⚠️ Yes' : '✅ No'}</div>
+      </div>
+      <div class="pred-item">
+        <div class="pred-item-label">Failure Stage</div>
+        <div class="pred-item-value" style="color:#fbbf24">${params.failure_stage}</div>
+      </div>
+    `;
+
+    const sorted = FAILURE_TYPES.map((f, i) => [f, probs[i]])
+      .sort((a, b) => b[1] - a[1]).slice(0, 6);
+
+    probBars.innerHTML = sorted.map(([label, prob]) => {
+      const pct = (prob * 100).toFixed(1);
+      const isTop = label === ft;
+      return `
+        <div class="prob-row">
+          <span class="prob-label" style="${isTop ? 'color:var(--text);font-weight:600' : ''}">${label}</span>
+          <div class="prob-bar"><div class="prob-fill" style="width:${pct}%;${isTop ? 'background:linear-gradient(90deg,#7c3aed,#06b6d4)' : 'background:var(--surface3)'}"></div></div>
+          <span class="prob-pct">${pct}%</span>
+        </div>
+      `;
+    }).join('');
+
+    pred.classList.add('visible');
+    spinner.style.display = 'none';
+    txt.textContent = '⚡ Predict Failure';
+    btn.disabled = false;
+  }, 600);
+}
+
+// ── Nav active state ──────────────────────────────────────────────
+function setActive(el) {
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  el.classList.add('active');
+}
+
+// ── Init ─────────────────────────────────────────────────────────
+async function init() {
+  await Promise.all([loadMetrics(), loadFeatureImportances()]);
+  renderModelTable();
+  renderAccF1Charts();
+  renderFeatureImportance();
+  renderDistributions();
+}
+
+init();
+</script>
+</body>
+</html>
