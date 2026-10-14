@@ -19,26 +19,32 @@ import joblib
 import numpy as np
 import pandas as pd
 
+import model_wrappers  # noqa: F401  (joblib resolves OrderedLabelEncoder / ThresholdScoreClassifier)
+
 warnings.filterwarnings("ignore", category=UserWarning)
 
 MODELS_DIR  = "models"
 RESULTS_DIR = "results"
 
-# Matching feature sets from train.py
+# Feature set written by train_v3.py (see models/feature_spec.json).
 CAT_COLS  = ["ci_tool", "language", "os", "cloud_provider", "branch", "failure_stage"]
 NUM_COLS  = ["build_duration_sec", "test_duration_sec", "deploy_duration_sec",
              "cpu_usage_pct", "memory_usage_mb", "retry_count"]
-ENG_NUM   = ["total_duration_sec", "build_ratio", "test_ratio", "cpu_x_retry", "mem_x_retry"]
-ENG_BOOL  = ["is_main_branch", "is_release_branch", "is_deploy_stage"]
+ENG_NUM = [
+    "sev_score",
+    "total_duration_sec", "build_ratio", "test_ratio", "deploy_ratio",
+    "log_build_duration_sec", "log_test_duration_sec",
+    "log_deploy_duration_sec", "log_memory_usage_mb", "log_total_duration_sec",
+    "cpu_x_retry", "mem_x_retry", "cpu_x_flaky", "sev_x_retry", "sev_x_flaky",
+]
+ENG_BOOL = [
+    "is_flaky_test",
+    "is_main_branch", "is_release_branch",
+    "is_deploy_stage", "is_test_stage", "is_build_stage",
+]
+FEATURE_COLS = CAT_COLS + NUM_COLS + ENG_NUM + ENG_BOOL
 
 TASKS = ["risk_level", "rollback_triggered", "incident_created"]
-
-# Task → bool cols used during training
-TASK_BOOL = {
-    "risk_level":          ["is_flaky_test", "rollback_triggered", "incident_created"] + ENG_BOOL,
-    "rollback_triggered":  ["is_flaky_test"] + ENG_BOOL,
-    "incident_created":    ["is_flaky_test"] + ENG_BOOL,
-}
 
 SEV_MAP = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
@@ -89,9 +95,11 @@ def parse_args():
 
 
 def engineer_features(args) -> pd.DataFrame:
-    """Mirror the feature engineering from train.py."""
-    sev_score = SEV_MAP[args.severity]
+    """Mirror the model features from train_v3.py. The risk tier is predicted;
+    the operational risk index is not recomputed at inference time."""
+    sev_score = SEV_MAP.get(args.severity, 2)
     total     = args.build_duration_sec + args.test_duration_sec + args.deploy_duration_sec
+    total_safe = total if total > 0 else 1
 
     row = {
         # Raw features
@@ -111,22 +119,33 @@ def engineer_features(args) -> pd.DataFrame:
         "is_flaky_test":       args.is_flaky_test,
         "rollback_triggered":  args.rollback_triggered,
         "incident_created":    args.incident_created,
-        # Engineered numeric
+        "sev_score":           sev_score,
         "total_duration_sec":  total,
-        "build_ratio":         args.build_duration_sec / (total + 1),
-        "test_ratio":          args.test_duration_sec  / (total + 1),
+        "build_ratio":         args.build_duration_sec / total_safe,
+        "test_ratio":          args.test_duration_sec  / total_safe,
+        "deploy_ratio":        args.deploy_duration_sec / total_safe,
+        "log_build_duration_sec":  np.log1p(args.build_duration_sec),
+        "log_test_duration_sec":   np.log1p(args.test_duration_sec),
+        "log_deploy_duration_sec": np.log1p(args.deploy_duration_sec),
+        "log_memory_usage_mb":     np.log1p(args.memory_usage_mb),
+        "log_total_duration_sec":  np.log1p(total),
         "cpu_x_retry":         args.cpu_usage_pct * args.retry_count,
         "mem_x_retry":         args.memory_usage_mb * args.retry_count,
+        "cpu_x_flaky":         args.cpu_usage_pct * args.is_flaky_test,
+        "sev_x_retry":         sev_score * args.retry_count,
+        "sev_x_flaky":         sev_score * args.is_flaky_test,
         # Engineered boolean
         "is_main_branch":    int(args.branch == "main"),
         "is_release_branch": int(args.branch == "release"),
         "is_deploy_stage":   int(args.failure_stage == "deploy"),
+        "is_test_stage":     int(args.failure_stage == "test"),
+        "is_build_stage":    int(args.failure_stage == "build"),
     }
     return pd.DataFrame([row])
 
 
 def get_task_feature_cols(task: str):
-    return CAT_COLS + NUM_COLS + ENG_NUM + TASK_BOOL[task]
+    return FEATURE_COLS
 
 
 def load_and_predict(task: str, X_full: pd.DataFrame):
@@ -159,7 +178,9 @@ def load_and_predict(task: str, X_full: pd.DataFrame):
 
     # Pull best model name from saved metrics
     best_model_name = "Unknown"
-    metrics_path = os.path.join(RESULTS_DIR, "metrics.json")
+    metrics_path = os.path.join(RESULTS_DIR, "metrics_v3.json")
+    if not os.path.exists(metrics_path):
+        metrics_path = os.path.join(RESULTS_DIR, "metrics_v2.json")
     if os.path.exists(metrics_path):
         with open(metrics_path) as f:
             m = json.load(f)

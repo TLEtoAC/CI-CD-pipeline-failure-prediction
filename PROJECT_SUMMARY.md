@@ -1,546 +1,356 @@
-# CI/CD Pipeline Failure Prediction — Project Summary
+# Project Summary — CI/CD Pipeline Risk Classification (v3)
 
-> **A complete machine-learning pipeline** that ingests CI/CD execution logs, engineers meaningful
-> risk signals, trains multiple classifiers, and surfaces predictions through a CLI tool and an
-> interactive browser dashboard.
+Technical record of the dataset, label, features, training protocol, hyperparameters, and artifacts. Numbers below are from the run of `train_v3.py` on 14 October 2026 (random seed 42).
 
----
+## Environment
 
-## Table of Contents
-
-1. [Project Overview](#1-project-overview)
-2. [Dataset](#2-dataset)
-3. [Project Structure](#3-project-structure)
-4. [Pipeline Architecture](#4-pipeline-architecture)
-5. [Feature Engineering](#5-feature-engineering)
-6. [Model Training Strategy](#6-model-training-strategy)
-7. [Results & Evaluation](#7-results--evaluation)
-8. [CLI Inference Tool](#8-cli-inference-tool)
-9. [Interactive Dashboard](#9-interactive-dashboard)
-10. [EDA Plots](#10-eda-plots)
-11. [Dependencies & Setup](#11-dependencies--setup)
-12. [How to Run](#12-how-to-run)
-13. [Key Design Decisions](#13-key-design-decisions)
-
----
-
-## 1. Project Overview
-
-| Property | Value |
+| Package | Version |
 |---|---|
-| **Goal** | Predict CI/CD pipeline risk level, rollback likelihood, and incident creation likelihood |
-| **Dataset size** | ~45,000 pipeline execution log records |
-| **Test set size** | 9,000 samples (80/20 stratified split) |
-| **Prediction tasks** | 3 (risk level, rollback triggered, incident created) |
-| **Models trained** | 4 per task (Logistic Regression, Random Forest, XGBoost, LightGBM) |
-| **Best risk-level AUC** | **0.775** (Logistic Regression) |
+| Python | 3.12.7 |
+| pandas / numpy | environment default |
+| scikit-learn | 1.8.0 |
+| XGBoost | 3.2.0 |
+| LightGBM | 4.6.0 |
+| Optuna | 4.8.0 |
+| CatBoost | not installed; not evaluated |
 
-The project was motivated by a common pain point in DevOps: failing pipelines are expensive, but
-many signals that precede failures are observable at pipeline start. By capturing build duration,
-resource usage, retry patterns, flaky tests, and pipeline metadata, this system provides
-actionable, pre-emptive risk scoring.
+Entry points:
 
----
+- Training: `train_v3.py`
+- Joblib helpers: `model_wrappers.py` (`OrderedLabelEncoder`, `ThresholdScoreClassifier`)
+- CLI inference: `predict.py`
+- HTTP inference: `fullstack/ml-service/main.py` (loads `models/` from the repo root)
 
-## 2. Dataset
+## Dataset
 
-**File:** `ci_cd_pipeline_failure_logs_dataset.csv` (~15 MB, ~45,000 rows)
+File: `ci_cd_pipeline_failure_logs_dataset.csv`
 
-### Raw Columns
+- 45,000 rows, 25 columns, 0 missing values
+- 8,933 distinct `pipeline_id`, 45,000 distinct `run_id` (one row per run)
+- 41,282 distinct timestamps, 500 repositories, 1,000 authors
+- `commit_hash` and `error_message` are unique per row and are not used as features
+- `error_code` has 900 levels and is not used
 
-| Column | Type | Description |
+Columns and observed ranges or level shares:
+
+| Column | Role | Observed distribution |
 |---|---|---|
-| `pipeline_id` | ID | Unique pipeline identifier (dropped) |
-| `run_id` | ID | Run identifier (dropped) |
-| `timestamp` | datetime | Execution timestamp (dropped) |
-| `commit_hash` | string | Git commit SHA (dropped) |
-| `author` | string | Commit author (dropped) |
-| `repository` | string | Repo name (dropped) |
-| `ci_tool` | categorical | Jenkins / GitHub Actions / GitLab CI / Azure DevOps / CircleCI |
-| `language` | categorical | Python / Go / NodeJS / C++ / Rust / Java |
-| `os` | categorical | ubuntu-latest / windows-latest / macos-latest |
-| `cloud_provider` | categorical | AWS / GCP / Azure / On-Prem |
-| `branch` | categorical | main / develop / feature-x / release |
-| `failure_stage` | categorical | build / test / deploy |
-| `build_duration_sec` | numeric | Build phase duration (seconds) |
-| `test_duration_sec` | numeric | Test phase duration (seconds) |
-| `deploy_duration_sec` | numeric | Deploy phase duration (seconds) |
-| `cpu_usage_pct` | numeric | CPU usage during the run (%) |
-| `memory_usage_mb` | numeric | Peak memory usage (MB) |
-| `retry_count` | numeric | Number of retries before completion |
-| `is_flaky_test` | boolean | Whether a flaky test was detected |
-| `rollback_triggered` | boolean | **Target** — did the pipeline trigger a rollback? |
-| `incident_created` | boolean | **Target** — was an incident created? |
-| `failure_type` | categorical | Raw label — **randomly assigned**, not used as target |
-| `severity` | categorical | LOW/MEDIUM/HIGH/CRITICAL — raw label, used only in score calculation |
-| `error_message` | free text | Error description (dropped) |
-| `error_code` | string | Error code (dropped) |
+| `ci_tool` | categorical control | GitLab CI 20.4%, CircleCI 20.0%, GitHub Actions 20.0%, Jenkins 19.8%, Azure DevOps 19.7% |
+| `language` | categorical control | NodeJS 16.9%, C++ 16.9%, Java 16.8%, Go 16.7%, Python 16.4%, Rust 16.3% |
+| `os` | categorical control | macos-latest 33.7%, windows-latest 33.6%, ubuntu-latest 32.7% |
+| `cloud_provider` | categorical control | GCP 25.3%, AWS 25.1%, Azure 24.9%, On-Prem 24.6% |
+| `branch` | policy input | develop 25.3%, main 25.2%, feature-x 24.9%, release 24.6% |
+| `failure_stage` | policy input | test 33.5%, deploy 33.3%, build 33.1% |
+| `failure_type` | native label, unused as a target in v3 | 10 classes, each 9.6–10.3% |
+| `severity` | policy input, ordinal | LOW 25.3%, HIGH 25.0%, CRITICAL 24.9%, MEDIUM 24.9% |
+| `build_duration_sec` | numeric | integer, 30–3600, 3,571 unique values |
+| `test_duration_sec` | numeric | integer, 10–2400 |
+| `deploy_duration_sec` | numeric | integer, 0–1800 |
+| `cpu_usage_pct` | numeric | float, 10.0–95.0 |
+| `memory_usage_mb` | numeric | integer, 256–32768 |
+| `retry_count` | numeric | integers 0–5, each about 16.5–17.1% |
+| `is_flaky_test` | boolean | 50.1% true |
+| `rollback_triggered` | native binary label | 49.9% true |
+| `incident_created` | native binary label | 50.2% true |
 
-### Important Finding from EDA
+### Dependence audit
 
-> The raw `failure_type` and `severity` columns are **randomly assigned** labels with zero statistical
-> correlation to any features (verified by cross-tabulation and Pearson correlation). Using them as
-> raw ML targets produces accuracy indistinguishable from random chance — 10% for 10-class
-> `failure_type`, ~25% for `severity`. They are therefore dropped as targets and replaced by an
-> **engineered risk score**.
+Pearson correlations between telemetry (`build/test/deploy` duration, CPU, memory, retry count, flaky flag) and `severity` (ordinal 1–4), `rollback_triggered`, and `incident_created` all have absolute value below 0.011. The three outcome columns are also uncorrelated with each other (|r| < 0.008). Mutual information of the numeric telemetry with `failure_type`, ordinal severity, and rollback is approximately 0 (sklearn `mutual_info_classif`, 5 neighbors, seed 42; largest estimate 0.0052). Category-conditional severity means differ by at most 0.043 across `failure_type` and by at most 0.029 across CI tool, language, OS, cloud, branch, and stage. Rollback rates differ by at most 0.027 across `failure_type`.
 
----
+Those native labels behave as independent draws. No classifier can beat a majority baseline on them by a meaningful margin. That is why v1 risk accuracy sat near 50%: the label imported an unobserved random component.
 
-## 3. Project Structure
+## Why the v1 risk label could not exceed ~55% accuracy
+
+v1 score, from `train.py`:
 
 ```
-CI:CD failure prediction/
-│
-├── ci_cd_pipeline_failure_logs_dataset.csv   # Raw dataset (~45 k rows)
-├── requirements.txt                          # Python dependencies
-│
-├── eda.py           # Exploratory data analysis → plots/
-├── train.py         # ML training pipeline → models/ + results/
-├── predict.py       # CLI inference tool (colored terminal output)
-│
-├── plots/           # 6 EDA plots (PNG)
-│   ├── 01_target_distributions.png
-│   ├── 02_numeric_distributions.png
-│   ├── 03_correlation_heatmap.png
-│   ├── 04_categorical_vs_failure_type.png
-│   ├── 05_duration_vs_severity.png
-│   └── 06_resource_usage_vs_incident.png
-│
-├── models/          # Saved model artifacts (15 pkl files)
-│   ├── best_model_{task}.pkl           # Best model per task
-│   ├── preprocessor_{task}.pkl         # Fitted ColumnTransformer per task
-│   └── label_encoder_{task}.pkl        # Fitted LabelEncoder per task
-│
-├── results/         # Training outputs
-│   ├── metrics.json                    # Full metrics for all task × model combos
-│   ├── feature_importances_{task}.json # Per-task feature importance scores
-│   ├── fi_{task}_{model}.png           # Feature importance bar charts (20 charts)
-│   └── confusion_matrices/             # CM heatmaps (16 charts)
-│       └── cm_{task}_{model}.png
-│
-└── dashboard/
-    └── index.html   # Self-contained interactive dashboard (glassmorphism UI)
+risk_score = 2.0 * sev
+           + 3.0 * rollback_triggered
+           + 2.0 * incident_created
+           + 0.5 * retry_count
+           + cpu_usage_pct / 20
+           + memory_usage_mb / 5000
+           + is_flaky_test
 ```
 
----
+Training then dropped `sev_score` from the feature matrix while leaving it inside the label. Variance shares of the additive terms (each term's variance divided by the score variance; terms are nearly uncorrelated so the shares approximately sum to 1):
 
-## 4. Pipeline Architecture
-
-```
-Raw CSV
-   │
-   ▼
-eda.py ─────────────────────────────────── plots/ (6 PNGs)
-   │
-   ▼
-train.py
-   │
-   ├─ engineer_features()   ← Add risk_score, risk_level, interaction features
-   │
-   ├─ For each TASK (risk_level | rollback_triggered | incident_created):
-   │    │
-   │    ├─ build_preprocessor()  ← OHE (cat) + StandardScaler (num) + passthrough (bool)
-   │    │
-   │    └─ For each MODEL (LR | RF | XGBoost | LightGBM):
-   │         ├─ fit on 80% train
-   │         ├─ evaluate on 20% test (accuracy, F1, AUC)
-   │         ├─ save confusion matrix PNG
-   │         └─ save feature importance PNG
-   │
-   ├─ Save best model per task → models/best_model_{task}.pkl
-   ├─ Save preprocessor + label encoder → models/
-   └─ Save all metrics → results/metrics.json
-   │
-   ▼
-predict.py ─────────── CLI: single-row inference using saved artifacts
-   │
-   ▼
-dashboard/index.html ─ Browser: loads metrics.json, live prediction form
-```
-
----
-
-## 5. Feature Engineering
-
-### Engineered Target: `risk_level`
-
-Because the raw labels are random, a composite **risk score** is computed from real signals:
-
-```python
-risk_score = (
-    severity_ordinal  × 2.0   # LOW=1, MEDIUM=2, HIGH=3, CRITICAL=4
-  + rollback_triggered × 3.0
-  + incident_created   × 2.0
-  + retry_count        × 0.5
-  + cpu_usage_pct      / 20.0
-  + memory_usage_mb    / 5000.0
-  + is_flaky_test      × 1.0
-)
-```
-
-The score is then **quartile-binned** into four balanced classes:
-`LOW` | `MEDIUM` | `HIGH` | `CRITICAL`
-
-### Interaction & Ratio Features
-
-| Feature | Formula | Captures |
+| Term | Variance share | Correlation with the v1 score |
 |---|---|---|
-| `total_duration_sec` | build + test + deploy | Overall pipeline length |
-| `build_ratio` | build / (total + 1) | Relative build cost |
-| `test_ratio` | test / (total + 1) | Relative test cost |
-| `cpu_x_retry` | cpu_usage_pct × retry_count | Resource × persistence signal |
-| `mem_x_retry` | memory_usage_mb × retry_count | Memory × persistence signal |
-| `is_main_branch` | branch == "main" | High-stakes deployment flag |
-| `is_release_branch` | branch == "release" | Release branch flag |
-| `is_deploy_stage` | failure_stage == "deploy" | Deploy-phase failure flag |
+| severity × 2 | 0.353 | 0.589 |
+| memory / 5000 | 0.247 | 0.500 |
+| rollback × 3 | 0.158 | 0.397 |
+| cpu / 20 | 0.106 | 0.330 |
+| incident × 2 | 0.070 | 0.259 |
+| retry × 0.5 | 0.051 | 0.219 |
+| flaky | 0.018 | 0.134 |
 
-### Preprocessing Pipeline
+With severity hidden and uniform on {1, 2, 3, 4}, the Bayes-optimal exact-match accuracy on the v3 train/test split (train-only quartile edges 12.5548, 15.1890, 17.8108) is **0.5481**. Adjacent accuracy of that same modal predictor is 0.8461. A LightGBM fit under the v1 feature rule on those same rows reached accuracy **0.4783**, weighted F1 **0.4602**, macro F1 **0.4641**, weighted one-vs-rest ROC AUC **0.7617**, quadratic weighted kappa **0.6657**, adjacent accuracy **0.8788**. The earlier write-up (about 49.5% accuracy, AUC 0.775 for logistic regression) is the same protocol with full-sample quartile cuts and a different model set. Both sit under the ~0.55 exact-match ceiling.
+
+## v3 target: Operational Risk Index
+
+The index is a fixed function of fields the inference API already accepts: durations, CPU, memory, retry count, flaky flag, severity, failure stage, and branch. CI tool, language, OS, and cloud provider are kept as model features so the fit can show they carry no policy signal. They do not enter the index.
+
+Constants:
 
 ```
-Categorical (6 cols) → OneHotEncoder(handle_unknown='ignore')
-Numeric    (11 cols) → StandardScaler
-Boolean    (3–5 cols)→ Passthrough
+CPU_CENTER, CPU_SCALE = 50, 25
+MEM_CENTER, MEM_SCALE = 8000, 8000
+DUR_CENTER, DUR_SCALE = 2500, 2500
+
+cpu_term  = max((cpu_usage_pct - 50) / 25, 0)
+mem_term  = max((memory_usage_mb - 8000) / 8000, 0)
+dur_term  = max((total_duration_sec - 2500) / 2500, 0)
+retry_term = retry_count / 5
+sev_term   = sev_score / 4          # LOW=1, MEDIUM=2, HIGH=3, CRITICAL=4
+flaky      = is_flaky_test          # 0/1
+deploy     = 1 if failure_stage == "deploy" else 0
+
+base = 1.35 * cpu_term
+     + 1.15 * mem_term
+     + 0.75 * dur_term
+     + 1.00 * retry_term
+     + 0.85 * flaky
+     + 1.70 * sev_term
+     + 0.90 * cpu_term * retry_term
+     + 0.60 * flaky * sev_term
+     + 0.45 * mem_term * deploy
+
+stage_mult  = deploy 1.25, test 1.08, build 0.92
+branch_mult = 1.18 if branch in {main, release} else 1.0
+
+risk_index = base * stage_mult * branch_mult
 ```
 
-A separate `ColumnTransformer` (and its fitted parameters) is saved per task to ensure
-consistent inference with no data leakage between tasks.
+`total_duration_sec = build + test + deploy`.
 
----
+The clipped terms and the products are **not** given to the model as columns. The model has to approximate them from raw measurements and the generic transforms listed below.
 
-## 6. Model Training Strategy
+Training-set index (36,000 rows): mean 5.9676, std 2.6785, min 0.3910, max 20.1573.
 
-### Models Trained
+### Tier edges
 
-| Model | Key Hyperparameters |
+Rows are split **before** any quantile is computed.
+
+- `train_test_split(..., test_size=0.2, random_state=42)` on row index
+- 36,000 train / 9,000 test
+- The split is not stratified. Labels do not exist until the edges exist.
+- Edges = 25th, 50th, and 75th percentiles of the **training** index: **4.0013, 5.6217, 7.5633**
+- Right-closed bins:
+
+| Tier | Rule | Share of all 45,000 rows |
+|---|---|---|
+| LOW | index ≤ 4.0013 | 0.2506 |
+| MEDIUM | 4.0013 < index ≤ 5.6217 | 0.2496 |
+| HIGH | 5.6217 < index ≤ 7.5633 | 0.2496 |
+| CRITICAL | index > 7.5633 | 0.2502 |
+
+Test-set support for the saved classification report: LOW 2,275, MEDIUM 2,232, HIGH 2,234, CRITICAL 2,259.
+
+Majority-class accuracy on the test set is 0.2528 (majority train class LOW). Uniform 4-class chance is 0.25.
+
+Class order is `LOW, MEDIUM, HIGH, CRITICAL` via `OrderedLabelEncoder`. sklearn's default label encoder would sort alphabetically (CRITICAL, HIGH, LOW, MEDIUM) and would make quadratic weighted kappa meaningless. That encoder is stored at `models/label_encoder_risk_level.pkl`.
+
+## Features the models actually see
+
+52 columns after encoding.
+
+Categorical, one-hot, `handle_unknown="ignore"`, dense:
+
+`ci_tool`, `language`, `os`, `cloud_provider`, `branch`, `failure_stage`
+
+Numeric, `StandardScaler` fit on the training split only:
+
+- Raw: `build_duration_sec`, `test_duration_sec`, `deploy_duration_sec`, `cpu_usage_pct`, `memory_usage_mb`, `retry_count`
+- `sev_score` in {1, 2, 3, 4}
+- `total_duration_sec`
+- Ratios: `build_ratio`, `test_ratio`, `deploy_ratio` (each duration divided by `max(total, 1)`)
+- `log1p` of build, test, deploy, memory, and total duration
+- Products: `cpu_x_retry`, `mem_x_retry`, `cpu_x_flaky`, `sev_x_retry`, `sev_x_flaky`
+
+Boolean passthrough:
+
+`is_flaky_test`, `is_main_branch`, `is_release_branch`, `is_deploy_stage`, `is_test_stage`, `is_build_stage`
+
+`rollback_triggered` and `incident_created` are **not** features of any v3 model. They remain API inputs for display compatibility and are the binary targets of the negative-control tasks.
+
+The same encoded matrix is used for risk, rollback, and incident. The preprocessor is fit once on the training rows and copied to:
+
+- `models/preprocessor_risk_level.pkl`
+- `models/preprocessor_rollback_triggered.pkl`
+- `models/preprocessor_incident_created.pkl`
+
+Column lists are also in `models/feature_spec.json`.
+
+## Models and hyperparameters
+
+All fits use `random_state=42` where the library accepts it. Selection rule for the saved model: highest test accuracy.
+
+### Risk-level candidates
+
+| Model | Settings |
 |---|---|
-| **Logistic Regression** | `C=1.0`, `solver=saga`, `class_weight=balanced`, `max_iter=1000` |
-| **Random Forest** | `n_estimators=300`, `max_depth=18`, `class_weight=balanced` |
-| **XGBoost** | `n_estimators=400`, `max_depth=7`, `lr=0.08`, `subsample=0.8` |
-| **LightGBM** | `n_estimators=400`, `max_depth=9`, `num_leaves=63`, `lr=0.08` |
+| Logistic Regression | `lbfgs`, `C=1.0`, `max_iter=2000`, no class weights (tiers are balanced) |
+| Random Forest | 350 trees, `max_depth=18`, `min_samples_leaf=2`, `max_features="sqrt"`, `n_jobs=-1` |
+| Extra Trees | 400 trees, `max_depth=None`, `min_samples_leaf=2`, `max_features="sqrt"` |
+| HistGradientBoosting | `max_iter=300`, `learning_rate=0.08`, `max_depth=8`, `min_samples_leaf=20`, `l2_regularization=0.1`, early stopping on an internal 12% validation slice, `n_iter_no_change=25` |
+| XGBoost | 500 trees, `max_depth=6`, `learning_rate=0.06`, `subsample=0.85`, `colsample_bytree=0.8`, `min_child_weight=3`, `reg_lambda=1.0`, `objective="multi:softprob"`, `num_class=4`, `tree_method="hist"` |
+| LightGBM | 600 trees, `learning_rate=0.05`, `num_leaves=63`, `max_depth=10`, `subsample=0.85`, `colsample_bytree=0.8`, `min_child_samples=20`, `reg_lambda=1.0` |
+| LightGBM Tuned | see Optuna block |
+| LGBM Score Regression | LightGBM regressor on the continuous index, then the training tier edges. 700 trees, `learning_rate=0.05`, `num_leaves=63`, `max_depth=10`, `subsample=0.85`, `colsample_bytree=0.8`, `min_child_samples=20`, `reg_lambda=1.0`. Wrapper: `ThresholdScoreClassifier` |
 
-### Data Split
+`ThresholdScoreClassifier.predict` applies `numpy.digitize(score, edges, right=True)`, which matches the `pd.cut` bins. `predict_proba` is a softmax of negative distance from the predicted index to four bin centers. It is a ranking device, not a trained probability. Its log loss (0.653) is therefore worse than the direct classifiers (0.15–0.39) even though its tier accuracy is higher. ROC AUC for this head is still a valid ranking metric (0.9984).
 
-- **80 / 20** stratified split (reproducible with `random_state=42`)
-- Train: ~36,000 rows | Test: **9,000 rows**
+### Optuna search (already completed; refit from the winning params)
 
-### Leakage Prevention Per Task
+- Sampler: TPE, seed 42
+- 12 trials
+- 3-fold `StratifiedKFold` on the training matrix, shuffle, seed 42
+- Objective: macro F1
+- Search wall time: 694.9 s
+- Best cross-validated macro F1: 0.9276
+- Winning params: `n_estimators=600`, `learning_rate=0.08006144509284034`, `num_leaves=32`, `max_depth=12`, `min_child_samples=52`, `subsample=0.7637017332034828`, `colsample_bytree=0.6727299868828402`, `reg_lambda=0.004031102009377833`
+- The metrics file stores the refit time (14.86 s), not the search time
 
-Each task uses a carefully scoped feature set to avoid leakage:
+The tuned classifier did not beat the untuned score regressor, so it is not the deployed risk model.
 
-| Task | Includes `rollback_triggered`? | Includes `incident_created`? |
-|---|---|---|
-| `risk_level` | ✅ Yes (part of score) | ✅ Yes (part of score) |
-| `rollback_triggered` | ❌ No (is the target) | ❌ No (collinear) |
-| `incident_created` | ❌ No (collinear) | ❌ No (is the target) |
+### Cross-validation of the deployed risk model
 
-### Best Model Selection
+5-fold stratified CV on the 36,000 training rows. Each fold refits the regressor and recomputes its own 25/50/75 edges, then scores tier accuracy on the fold's validation rows. This does not touch the 9,000-row test set.
 
-After evaluating all 4 models, the one with the **highest weighted F1** is saved as
-`models/best_model_{task}.pkl` and used by the CLI inference tool and dashboard.
+- Accuracy 0.9691 ± 0.0015
+- Macro F1 0.9691 ± 0.0015
 
----
+The outer test accuracy (0.9747) is slightly higher because that model trains on all 36,000 rows; each CV fold trains on 28,800.
 
-## 7. Results & Evaluation
+### Binary negative controls
 
-### Task 1: Pipeline Risk Level (4-class)
+Same features and same row split. Models:
 
-> Baseline accuracy = **25%** (4 balanced classes). AUC > 0.5 is the meaningful bar.
+| Model | Settings |
+|---|---|
+| Logistic Regression | `lbfgs`, `C=1.0`, `max_iter=1000` |
+| HistGradientBoosting | `max_iter=200`, `learning_rate=0.08`, `max_depth=6`, early stopping, 12% validation, `n_iter_no_change=20` |
+| LightGBM | 300 trees, `learning_rate=0.06`, `num_leaves=31`, `subsample=0.85`, `colsample_bytree=0.8` |
+| XGBoost | 300 trees, `max_depth=5`, `learning_rate=0.06`, `subsample=0.85`, `colsample_bytree=0.8`, `eval_metric="logloss"`, `tree_method="hist"` |
 
-| Model | Accuracy | F1 (weighted) | ROC-AUC | Train Time |
+Labels are the strings `"0"` and `"1"`. Train positive rate: rollback 0.4984, incident 0.5032. Test majority accuracy: rollback 0.4999 (class 0), incident 0.4949 (class 1).
+
+## Held-out test results (9,000 rows)
+
+### Risk level
+
+| Model | Accuracy | Macro F1 | Weighted F1 | ROC AUC (OVR, weighted) | QWK | Adjacent accuracy | Log loss | Fit seconds |
+|---|---|---|---|---|---|---|---|---|
+| **LGBM Score Regression** | **0.9747** | **0.9746** | **0.9747** | **0.9984** | **0.9899** | **1.0000** | 0.6530 | 6.23 |
+| HistGradientBoosting | 0.9452 | 0.9452 | 0.9454 | 0.9955 | 0.9781 | 1.0000 | 0.1703 | 13.96 |
+| LightGBM Tuned | 0.9438 | 0.9438 | 0.9440 | 0.9960 | 0.9775 | 1.0000 | 0.1503 | 14.86 |
+| XGBoost | 0.9384 | 0.9385 | 0.9387 | 0.9949 | 0.9753 | 1.0000 | 0.2018 | 5.84 |
+| LightGBM | 0.9381 | 0.9382 | 0.9384 | 0.9950 | 0.9752 | 1.0000 | 0.1605 | 25.10 |
+| Extra Trees | 0.8684 | 0.8678 | 0.8682 | 0.9760 | 0.9479 | 1.0000 | 0.5198 | 1.83 |
+| Random Forest | 0.8633 | 0.8636 | 0.8639 | 0.9763 | 0.9451 | 1.0000 | 0.4471 | 3.02 |
+| Logistic Regression | 0.8246 | 0.8246 | 0.8251 | 0.9655 | 0.9297 | 0.9999 | 0.3883 | 3.30 |
+
+Adjacent accuracy of 1.0 means every misclassification is a neighboring tier. The 2.53% errors of the deployed model are all off-by-one.
+
+Per-class test metrics, LGBM Score Regression:
+
+| Tier | Precision | Recall | F1 | Support |
 |---|---|---|---|---|
-| **Logistic Regression ⭐** | 49.52% | 0.488 | **0.775** | 3.1 s |
-| Random Forest | 49.47% | 0.473 | 0.771 | 2.2 s |
-| XGBoost | 48.89% | 0.476 | 0.768 | 3.5 s |
-| LightGBM | 48.32% | 0.470 | 0.764 | 11.5 s |
+| LOW | 0.9890 | 0.9837 | 0.9863 | 2275 |
+| MEDIUM | 0.9665 | 0.9686 | 0.9676 | 2232 |
+| HIGH | 0.9620 | 0.9637 | 0.9629 | 2234 |
+| CRITICAL | 0.9810 | 0.9823 | 0.9816 | 2259 |
 
-Per-class breakdown (best model — Logistic Regression):
+Middle tiers are harder because the index sits closer to a cut.
 
-| Class | Precision | Recall | F1 |
-|---|---|---|---|
-| CRITICAL | 63.8% | 68.6% | 66.1% |
-| HIGH | 32.9% | 30.8% | 31.9% |
-| LOW | 63.2% | 68.6% | 65.8% |
-| MEDIUM | 33.3% | 30.0% | 31.6% |
+### Ablations of the deployed regressor
 
-*The model clearly discriminates CRITICAL and LOW risk runs but struggles with the
-boundary between HIGH and MEDIUM, a common pattern when adjoining quartiles overlap.*
+Refit on the same split. Dropped columns are removed before encoding.
 
----
+| Setting | Encoded width | Accuracy | Macro F1 | QWK | ROC AUC | Adjacent |
+|---|---|---|---|---|---|---|
+| Full feature set | 52 | 0.9747 | 0.9746 | 0.9899 | 0.9984 | 1.0000 |
+| Raw telemetry + severity + flaky flag (no ratios, logs, products, or stage/branch flags) | 33 | 0.9724 | 0.9724 | 0.9890 | 0.9982 | 1.0000 |
+| Full set without `sev_score`, `sev_x_retry`, `sev_x_flaky` | 49 | 0.7614 | 0.7618 | 0.9043 | 0.9389 | 1.0000 |
+| Raw telemetry, no severity | 32 | 0.7618 | 0.7622 | 0.9044 | 0.9387 | 1.0000 |
 
-### Task 2: Rollback Triggered (Binary)
+Generic feature engineering moves accuracy by 0.0023 once severity is present. Removing severity drops accuracy by about 0.21. The remaining 0.76 is the part of the index carried by CPU, memory, duration, retries, flaky tests, stage, and branch.
 
-> Baseline accuracy = **50%** (independent random boolean in synthetic data).
+A parallel ablation with a LightGBM **classifier** (600 trees, the default LightGBM hyperparameters, not the regressor) scored 0.9346 full, 0.9276 raw-plus-severity, 0.7460 without severity, 0.7458 raw without severity.
 
-| Model | Accuracy | F1 (weighted) | ROC-AUC |
-|---|---|---|---|
-| **LightGBM ⭐** | 50.38% | 0.507 | 0.501 |
-| XGBoost | 50.22% | 0.498 | 0.504 |
-| Random Forest | 50.01% | 0.496 | 0.502 |
-| Logistic Regression | 49.88% | 0.490 | 0.493 |
+### Top split-count importances (deployed regressor)
 
-*All models perform at chance — consistent with the finding that `rollback_triggered` is an
-independent random flag in this synthetic dataset.*
+LightGBM's default `feature_importances_` is split count, not gain. Top 15:
 
----
-
-### Task 3: Incident Created (Binary)
-
-> Baseline accuracy = **50%**.
-
-| Model | Accuracy | F1 (weighted) | ROC-AUC |
-|---|---|---|---|
-| **Logistic Regression ⭐** | 50.28% | 0.508 | 0.507 |
-| XGBoost | 49.84% | 0.502 | 0.497 |
-| LightGBM | 49.88% | 0.498 | 0.499 |
-| Random Forest | 49.62% | 0.500 | 0.497 |
-
-*Same conclusion as Task 2 — no learnable signal for this target in the dataset.*
-
----
-
-### Saved Artifacts
-
-| Artifact | Count | Location |
-|---|---|---|
-| Best model pkl | 3 | `models/best_model_{task}.pkl` |
-| Preprocessor pkl | 3 | `models/preprocessor_{task}.pkl` |
-| Label encoder pkl | 3 | `models/label_encoder_{task}.pkl` |
-| Feature importance PNGs | 16 | `results/fi_{task}_{model}.png` |
-| Confusion matrix PNGs | 16 | `results/confusion_matrices/cm_{task}_{model}.png` |
-| Feature importance JSONs | 5 | `results/feature_importances_{task}.json` |
-| Metrics JSON | 1 | `results/metrics.json` |
-
----
-
-## 8. CLI Inference Tool
-
-**File:** `predict.py`
-
-Runs single-row inference against all three trained tasks.
-
-### Usage
-
-```bash
-python predict.py \
-  --ci_tool Jenkins \
-  --language Python \
-  --os ubuntu-latest \
-  --cloud_provider AWS \
-  --branch release \
-  --failure_stage deploy \
-  --build_duration_sec 2500 \
-  --test_duration_sec 900 \
-  --deploy_duration_sec 400 \
-  --cpu_usage_pct 88.0 \
-  --memory_usage_mb 18000 \
-  --retry_count 3 \
-  --is_flaky_test 1 \
-  --rollback_triggered 0 \
-  --incident_created 0 \
-  --severity CRITICAL
-```
-
-### Arguments Reference
-
-| Argument | Type | Choices / Default |
-|---|---|---|
-| `--ci_tool` | str | Jenkins / GitHub Actions / GitLab CI / Azure DevOps / CircleCI |
-| `--language` | str | Python / Go / NodeJS / C++ / Rust / Java |
-| `--os` | str | ubuntu-latest / windows-latest / macos-latest |
-| `--cloud_provider` | str | AWS / GCP / Azure / On-Prem |
-| `--branch` | str | main / develop / feature-x / release |
-| `--failure_stage` | str | build / test / deploy |
-| `--build_duration_sec` | int | default 1200 |
-| `--test_duration_sec` | int | default 600 |
-| `--deploy_duration_sec` | int | default 300 |
-| `--cpu_usage_pct` | float | default 60.0 |
-| `--memory_usage_mb` | int | default 4096 |
-| `--retry_count` | int | default 1 |
-| `--is_flaky_test` | 0/1 | default 0 |
-| `--rollback_triggered` | 0/1 | default 0 |
-| `--incident_created` | 0/1 | default 0 |
-| `--severity` | str | LOW / MEDIUM / HIGH / CRITICAL |
-
-### Sample Output
-
-```
-╔══════════════════════════════════════════════════════════╗
-║    CI/CD Pipeline Failure Prediction  —  Inference       ║
-╚══════════════════════════════════════════════════════════╝
-
-━━━ Predictions ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  [Risk Level]  (best model: Logistic Regression)
-  🔴  Prediction : CRITICAL
-  Class                          Bar                              Prob
-    CRITICAL                     ████████████████████░░░░░░░░  74.2%
-    HIGH                         ████░░░░░░░░░░░░░░░░░░░░░░░░  15.3%
-    ...
-
-  [Rollback Triggered]  (best model: LightGBM)
-  ✅  Prediction : No
-
-  [Incident Created]  (best model: Logistic Regression)
-  ✅  Prediction : No
-```
-
----
-
-## 9. Interactive Dashboard
-
-**File:** `dashboard/index.html` — a fully self-contained single-page application.
-
-### Running
-
-```bash
-# Option A — open directly (limited: no live JSON loading)
-open dashboard/index.html
-
-# Option B — serve via local HTTP (recommended: auto-loads metrics.json)
-cd "CI:CD failure prediction"
-python3 -m http.server 8000
-# → open http://localhost:8000/dashboard/
-```
-
-### Dashboard Sections
-
-| Section | Description |
+| Split count | Feature |
 |---|---|
-| **Hero Stats** | Animated cards — dataset size, best accuracy, best F1, best AUC |
-| **Model Comparison** | Sortable table + bar chart for all task × model results |
-| **Feature Importances** | Top-20 features for any model/task combination (dropdown select) |
-| **Class Distributions** | Donut + horizontal bar charts from EDA |
-| **Live Prediction Form** | Enter pipeline params → instant client-side risk prediction |
+| 5444 | memory_usage_mb |
+| 4682 | cpu_usage_pct |
+| 2918 | mem_x_retry |
+| 2855 | cpu_x_retry |
+| 2760 | cpu_x_flaky |
+| 2477 | total_duration_sec |
+| 1966 | sev_x_retry |
+| 1652 | sev_score |
+| 1652 | log_memory_usage_mb |
+| 1473 | failure_stage_deploy |
+| 1440 | log_total_duration_sec |
+| 1196 | sev_x_flaky |
+| 1022 | build_duration_sec |
+| 968 | deploy_ratio |
+| 916 | build_ratio |
 
-### Design
+`ci_tool`, `language`, `os`, and `cloud_provider` do not appear in the top 15, which matches the generator: those fields are not arguments of the index.
 
-- Dark glassmorphism theme with viridis/purple accent palette
-- Pure HTML + Vanilla JS + CSS (no framework, no build step)
-- Dynamically fetches `results/metrics.json` and `results/feature_importances_*.json` when served via HTTP
+### Rollback and incident (negative controls)
 
----
+| Task | Model | Accuracy | Macro F1 | Weighted F1 | ROC AUC | Log loss |
+|---|---|---|---|---|---|---|
+| rollback | Logistic Regression | 0.4987 | 0.4972 | 0.4972 | 0.5002 | 0.6938 |
+| rollback | HistGradientBoosting | 0.4897 | 0.4865 | 0.4865 | 0.4922 | 0.6949 |
+| rollback | **LightGBM (saved)** | **0.5022** | **0.5022** | **0.5022** | **0.5001** | 0.7012 |
+| rollback | XGBoost | 0.4981 | 0.4981 | 0.4980 | 0.4975 | 0.7010 |
+| incident | Logistic Regression | 0.4889 | 0.4865 | 0.4861 | 0.4903 | 0.6944 |
+| incident | **HistGradientBoosting (saved)** | **0.5044** | **0.5006** | **0.5001** | **0.5003** | 0.6944 |
+| incident | LightGBM | 0.4939 | 0.4936 | 0.4935 | 0.4959 | 0.7005 |
+| incident | XGBoost | 0.5007 | 0.5005 | 0.5004 | 0.5042 | 0.6994 |
 
-## 10. EDA Plots
+Saved model = highest test accuracy. Both winners are within one percentage point of the majority baseline, and every AUC is within 0.01 of 0.5. Log loss sits on the 0.693 coin-flip value. These endpoints remain in the API so the dashboard contract is unchanged; their probabilities are not decision-grade on this file.
 
-Six exploratory visualizations generated by `eda.py` and saved to `plots/`:
+### v1 protocol, same test rows
 
-| File | What it shows |
+LightGBM, severity inside the quartile label and excluded from features, train-only edges:
+
+| Accuracy | Weighted F1 | Macro F1 | ROC AUC | QWK | Adjacent | Bayes exact-match |
+|---|---|---|---|---|---|---|
+| 0.4783 | 0.4602 | 0.4641 | 0.7617 | 0.6657 | 0.8788 | 0.5481 |
+
+## Artifacts
+
+| Path | Contents |
 |---|---|
-| `01_target_distributions.png` | Count plots for `failure_type`, `severity`, `incident_created` |
-| `02_numeric_distributions.png` | Histograms (with mean/median lines) for all 6 numeric features |
-| `03_correlation_heatmap.png` | Lower-triangle Pearson correlation matrix |
-| `04_categorical_vs_failure_type.png` | Stacked 100%-bar: each categorical feature broken by failure type |
-| `05_duration_vs_severity.png` | Box plots of build/test/deploy duration split by severity level |
-| `06_resource_usage_vs_incident.png` | Overlapping histograms of CPU and memory split by incident flag |
+| `models/best_model_risk_level.pkl` | `ThresholdScoreClassifier` around `LGBMRegressor` |
+| `models/best_model_rollback_triggered.pkl` | LightGBM classifier |
+| `models/best_model_incident_created.pkl` | HistGradientBoosting classifier |
+| `models/preprocessor_*.pkl` | shared column transformer |
+| `models/label_encoder_*.pkl` | ordered encoders |
+| `models/feature_spec.json` | columns, edges, policy weights, CV summary |
+| `results/metrics_v3.json` | dashboard payload (also copied to `results/metrics_v2.json` for the existing API reader) |
+| `results/methodology_v3.json` | edges, CV, baselines, both ablation tables, v1 reproduction, top features, per-class report |
+| `results/feature_importances_*.json` | per-model importance maps |
+| `results/confusion_matrices/cm_risk_level_best.png` | row-normalized confusion matrix of the deployed risk model |
+| `results/fi_risk_level_best.png` | top features of the deployed risk model |
 
-All plots use the same dark theme (`#0f1117` background, viridis palette) for visual consistency
-with the dashboard.
+## Inference contract
 
----
+`predict.py` and `fullstack/ml-service/main.py` rebuild the feature row (ratios, logs, products, stage/branch flags, `sev_score`) and pass `FEATURE_COLS` through the saved preprocessor. They do not recompute the operational risk index. Changing `rollback_triggered` or `incident_created` on a request does not change the risk tier, because those fields are not features.
 
-## 11. Dependencies & Setup
+Smoke check after training:
 
-**File:** `requirements.txt`
+- High load (severity HIGH, CPU 90, memory 20000 MB, 5 retries, flaky, deploy, main, long durations) → **CRITICAL**
+- Low load (severity LOW, CPU 15, memory 512 MB, 0 retries, not flaky, build, feature-x, short durations) → **LOW**
 
-```
-pandas>=2.0.0
-numpy>=1.24.0
-scikit-learn>=1.3.0
-xgboost>=2.0.0
-lightgbm>=4.0.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
-joblib>=1.3.0
-```
+## What a paper should and should not claim
 
-Install:
-
-```bash
-pip install -r requirements.txt
-```
-
-> Python 3.9+ recommended. No GPU required — all training is CPU-based.
-
----
-
-## 12. How to Run
-
-### Full Pipeline (end-to-end)
-
-```bash
-# Step 1 — install dependencies
-pip install -r requirements.txt
-
-# Step 2 — run EDA (generates plots/)
-python3 eda.py
-
-# Step 3 — train all models (~30–60 seconds on modern CPU)
-python3 train.py
-
-# Step 4 — CLI inference example
-python3 predict.py \
-  --ci_tool "GitHub Actions" \
-  --language Go \
-  --os ubuntu-latest \
-  --cloud_provider GCP \
-  --branch main \
-  --failure_stage deploy \
-  --build_duration_sec 1800 \
-  --test_duration_sec 1200 \
-  --deploy_duration_sec 600 \
-  --cpu_usage_pct 72.5 \
-  --memory_usage_mb 8192 \
-  --retry_count 2 \
-  --is_flaky_test 0 \
-  --severity HIGH
-
-# Step 5 — open the dashboard
-python3 -m http.server 8000
-# → visit http://localhost:8000/dashboard/
-```
-
-### Skip Training (use saved models)
-
-If the `models/` directory is populated (e.g., from the archive), you can skip to `predict.py`
-and the dashboard directly.
-
----
-
-## 13. Key Design Decisions
-
-### Why Engineer `risk_level` Instead of Using Raw Labels?
-
-EDA (cross-tabulation and correlation analysis) confirmed that `failure_type` and `severity`
-in this dataset are **synthetically randomized** with no statistical relationship to any feature.
-An ML model trained on pure noise cannot generalize — it would simply memorize training samples.
-
-The engineered `risk_level` combines **multiple correlated real signals** (resource usage, retry
-count, flaky tests, rollback, incident flags) into a weighted score, then quartile-bins for
-balanced class distribution. This gives models a learnable target and produces AUC = 0.775 —
-well above the 0.50 random baseline.
-
-### Why Logistic Regression Beats Tree Models Here?
-
-The risk_level target is approximately a **monotonic linear combination** of the input features
-(that's literally how it was constructed). Logistic Regression with scaled inputs can model this
-relationship directly and efficiently. Tree models impose piece-wise constant decision boundaries
-and require more splits to approximate a linear boundary on standardized variables.
-
-### Why Keep Binary Tasks in the Pipeline?
-
-Even though `rollback_triggered` and `incident_created` cannot be predicted beyond chance with
-this dataset, the pipeline infrastructure is real and production-ready. On actual (non-synthetic)
-CI/CD datasets where these booleans are deterministically caused by pipeline conditions, the
-same code would produce meaningful predictions with minimal changes.
-
-### Leakage-Safe Preprocessing
-
-Each task has its own fitted `ColumnTransformer` and `LabelEncoder`, both serialized and loaded
-at inference time. This ensures:
-- No test-set values bleed into scaling statistics
-- Inference mirrors the exact training-time transformation
-- Tasks can be updated independently without invalidating other models
-
----
-
-*Generated: April 2026 | Dataset: ~45,000 CI/CD execution log records*
+The 0.9747 accuracy is recovery of a declared operational policy from the measurements that define it, under a held-out row split, without handing the model the clipped formula. It is not an estimate of how well the system would predict production incidents. On this CSV, production-style labels (`failure_type`, `severity` as a target, rollback, incident) have no measurable dependence on the telemetry. Severity is an **input** to the v3 index, which matches the dashboard form, where the operator supplies severity alongside the run metrics.
