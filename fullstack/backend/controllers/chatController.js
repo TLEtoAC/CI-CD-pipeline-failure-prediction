@@ -5,11 +5,11 @@ const CHAT_KB = [
   },
   {
     patterns: ["rollback", "rollback triggered", "what is rollback"],
-    answer: "**Rollback Triggered** predicts whether a deployment rollback will be necessary. A rollback reverts the system to the last stable state when a deployment causes issues.\n\n⚠️ A **Yes** prediction means the model detected conditions that historically led to rollbacks (high retry counts, critical severity, deploy-stage failures)."
+    answer: "**Rollback Triggered** is a binary classifier on the dataset column of the same name. On the 9,000-row test split the best model (LightGBM) scores **50.2%** accuracy and **0.50 AUC**, against a 50.0% majority baseline.\n\nChanging CPU, retries, or severity does not move this probability. The column is independent of the telemetry."
   },
   {
     patterns: ["incident", "incident created", "what is incident"],
-    answer: "**Incident Created** predicts whether the pipeline failure will escalate into a formal incident report. Incidents typically involve:\n- Production outages\n- SLA breaches\n- On-call alerts\n\nThis is a binary prediction: **Yes** or **No**."
+    answer: "**Incident Created** is a binary classifier on the dataset column of the same name. The saved model is histogram gradient boosting at **50.4%** accuracy and **0.50 AUC**, against a 49.5% majority baseline.\n\nIt returns Yes or No, but both probabilities stay near one half."
   },
   {
     patterns: ["confidence", "confidence score", "probability"],
@@ -37,11 +37,11 @@ const CHAT_KB = [
   },
   {
     patterns: ["model", "which model", "algorithm", "logistic regression", "xgboost", "lightgbm", "random forest"],
-    answer: "The system trained **5 models** per prediction task:\n\n| Model | Task 1 AUC |\n|---|---|\n| Logistic Regression ⭐ | **0.9995** |\n| Random Forest | 0.9958 |\n| XGBoost | 0.9987 |\n| LightGBM | 0.9986 |\n| LightGBM_Tuned | 0.9987 |\n\nLogistic Regression is the best model for Risk Level prediction (highest AUC). LightGBM Tuned leads for Rollback prediction."
+    answer: "The deployed **risk** model is a LightGBM regressor of the operational risk index, then cut into four tiers. Held-out accuracy is **0.9747**.\n\nDirect classifiers on the same tier: HistGradientBoosting 0.9452, tuned LightGBM 0.9438, XGBoost 0.9384, LightGBM 0.9381, extra trees 0.8684, random forest 0.8633, logistic regression 0.8246.\n\nRollback is LightGBM at 0.5022. Incident is HistGradientBoosting at 0.5044. Both match chance."
   },
   {
     patterns: ["accuracy", "f1", "auc", "metrics", "performance"],
-    answer: "**Model Performance** on 9,000 test samples:\n\n**Risk Level (4-class)**\n- Best Accuracy: 98.19% (vs 25% random baseline)\n- Best AUC: **0.9995** ✅\n\n> Note: 98.19% accuracy on 4 classes is outstanding — the models successfully learned the complex interactions!\n\n**Rollback & Incident** tasks have AUC ≈ 0.50 because these columns are randomly assigned in the synthetic dataset."
+    answer: "**Held-out performance** on 9,000 test rows:\n\n**Risk level** — LightGBM score regression, accuracy **0.9747**, AUC **0.9984**. Majority baseline is 0.25.\n\n**Rollback** — LightGBM, accuracy **0.5022**, AUC **0.5001**.\n\n**Incident** — HistGradientBoosting, accuracy **0.5044**, AUC **0.5003**.\n\nRollback and incident match chance because those columns are independent of the features."
   },
   {
     patterns: ["branch", "main", "develop", "release", "feature"],

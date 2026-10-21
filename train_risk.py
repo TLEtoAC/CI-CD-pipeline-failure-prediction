@@ -86,7 +86,7 @@ ENG_NUM = [
     "test_ratio",
     "deploy_ratio",
     "log_build_duration_sec",
-    "log_test_duration_sec",
+    "log_test_duration_sec", 
     "log_deploy_duration_sec",
     "log_memory_usage_mb",
     "log_total_duration_sec",

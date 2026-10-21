@@ -1,0 +1,133 @@
+{
+  "rows_in": 45000,
+  "cols_in": 25,
+  "steps": [
+    {
+      "name": "select_columns",
+      "dropped_extra": [],
+      "missing_required": []
+    },
+    {
+      "name": "strip_strings",
+      "nulls_before": 0,
+      "nulls_after_strip": 0
+    },
+    {
+      "name": "deduplicate",
+      "exact_duplicates_removed": 0,
+      "duplicate_run_ids_removed": 0
+    },
+    {
+      "name": "parse_timestamp",
+      "invalid_timestamps": 0
+    },
+    {
+      "name": "cast_booleans",
+      "columns": [
+        "is_flaky_test",
+        "rollback_triggered",
+        "incident_created"
+      ]
+    },
+    {
+      "name": "cast_numerics",
+      "nulls_after_cast": {
+        "build_duration_sec": 0,
+        "test_duration_sec": 0,
+        "deploy_duration_sec": 0,
+        "cpu_usage_pct": 0,
+        "memory_usage_mb": 0,
+        "retry_count": 0
+      }
+    },
+    {
+      "name": "canonicalize_categoricals",
+      "detail": {
+        "severity": {
+          "unknown_or_invalid": 0
+        },
+        "failure_stage": {
+          "unknown_or_invalid": 0
+        },
+        "branch": {
+          "unknown_or_invalid": 0
+        },
+        "ci_tool": {
+          "unknown_or_invalid": 0
+        },
+        "language": {
+          "unknown_or_invalid": 0
+        },
+        "os": {
+          "unknown_or_invalid": 0
+        },
+        "cloud_provider": {
+          "unknown_or_invalid": 0
+        }
+      }
+    },
+    {
+      "name": "impute",
+      "detail": {
+        "timestamp_rows_dropped": 0
+      }
+    },
+    {
+      "name": "outliers",
+      "detail": {
+        "build_duration_sec": {
+          "iqr_outliers": 0,
+          "domain_outliers": 0,
+          "clipped_to": [
+            0,
+            7200
+          ]
+        },
+        "test_duration_sec": {
+          "iqr_outliers": 0,
+          "domain_outliers": 0,
+          "clipped_to": [
+            0,
+            7200
+          ]
+        },
+        "deploy_duration_sec": {
+          "iqr_outliers": 0,
+          "domain_outliers": 0,
+          "clipped_to": [
+            0,
+            7200
+          ]
+        },
+        "cpu_usage_pct": {
+          "iqr_outliers": 0,
+          "domain_outliers": 0,
+          "clipped_to": [
+            0,
+            100
+          ]
+        },
+        "memory_usage_mb": {
+          "iqr_outliers": 0,
+          "domain_outliers": 0,
+          "clipped_to": [
+            0,
+            65536
+          ]
+        },
+        "retry_count": {
+          "iqr_outliers": 0,
+          "domain_outliers": 0,
+          "clipped_to": [
+            0,
+            20
+          ]
+        }
+      }
+    }
+  ],
+  "rows_out": 45000,
+  "cols_out": 30,
+  "rows_removed": 0,
+  "nulls_remaining": {}
+}

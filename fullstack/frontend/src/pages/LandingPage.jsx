@@ -78,7 +78,7 @@ export default function LandingPage() {
             transition={{ duration: 0.7, delay: 0.2 }}
             className="text-lg md:text-xl text-slate-400 mb-10 max-w-2xl mx-auto leading-relaxed"
           >
-            Leverage state-of-the-art machine learning to predict CI/CD failures, deployment rollbacks, and potential incidents with up to 98% accuracy.
+            Score a declared pipeline risk tier from CPU, memory, duration, retries, and severity. On the held-out split that tier matches at 97.5%. Rollback and incident labels in this dataset stay at chance.
           </motion.p>
           
           <motion.div 
@@ -120,8 +120,8 @@ export default function LandingPage() {
           >
             {[
               { icon: ShieldAlert, title: "Risk Level Detection", desc: "Identify LOW to CRITICAL risk levels instantly based on memory, CPU, and severity." },
-              { icon: GitBranch, title: "Rollback Prediction", desc: "Anticipate deployment failures before they reach production users." },
-              { icon: Activity, title: "Incident Forecasting", desc: "Predict if a pipeline run will result in a formal Sev-1/Sev-2 incident." },
+              { icon: GitBranch, title: "Rollback check", desc: "A binary classifier on the dataset's rollback flag. It does not beat a coin flip, and the test bench shows that directly." },
+              { icon: Activity, title: "Incident check", desc: "A second binary classifier on incident_created. Held-out accuracy sits on the majority baseline." },
               { icon: Terminal, title: "Multi-Tool Support", desc: "Works seamlessly across Jenkins, GitHub Actions, GitLab CI, and Azure DevOps." },
               { icon: Cpu, title: "Resource Profiling", desc: "Monitors CPU usage, memory consumption, and retry counts to find anomalies." },
               { icon: Layers, title: "Deep Analytics", desc: "Understand exactly why a build is failing with interactive feature importances." }
@@ -184,7 +184,7 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto relative z-10">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
             {[
-              { value: "98.2%", label: "Peak Accuracy" },
+              { value: "97.5%", label: "Risk-tier accuracy" },
               { value: "45k+", label: "Pipelines Analyzed" },
               { value: "5", label: "Ensemble Models" },
               { value: "<50ms", label: "Inference Time" }
